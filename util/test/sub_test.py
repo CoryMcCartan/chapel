@@ -134,6 +134,7 @@ import re
 import shlex
 import datetime
 import atexit
+import difflib
 import logging
 
 
@@ -1792,12 +1793,15 @@ def ReadFileWithComments(f, ignoreLeadingSpace=True):
 # diff 2 files
 def DiffFiles(f1, f2):
     logger.write('[Executing diff %s %s]'%(f1, f2))
-    p = subprocess.Popen(['diff',f1,f2],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    myoutput = p.communicate()[0] # grab stdout to avoid potential deadlock
-    if p.returncode != 0:
-        logger.write(trim_output(myoutput))
-    return p.returncode
+    with open(f1, "r") as f:
+        s1 = [line for line in f]
+    with open(f2, "r") as f:
+        s2 = [line for line in f]
+
+    for line in difflib.unified_diff(s1, s2, fromfile=f1, tofile=f2):
+        logger.write(line)
+    
+    return 0
 
 # diff output vs. .bad file, filtering line numbers out of error messages that arise
 # in module files.
