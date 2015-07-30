@@ -19,7 +19,7 @@ import contextlib
 import logging
 import atexit
 from chplenv import *
-
+import test.sub_test as sub_test_script
 
 # PROGRAM ENTRY POINT
 def main():
@@ -407,21 +407,22 @@ def run(test=False):
         os.environ["CHPL_ONETEST"] = os.path.basename(test)
 
     if os.access("sub_test", os.X_OK):
-        sub_test = os.path.abspath("sub_test")
+        alt_sub_test = os.path.abspath("sub_test")
+        logger.write("[Starting {} {}]".format(alt_sub_test, date_str))
+        # sub_test and create_graphs use a Popen() call in order to give real-time
+        # output to the command line, instead of logging all output in one huge
+        # block.
+        p = subprocess.Popen([alt_sub_test, compiler], stdout=subprocess.PIPE)
+        printout(p.stdout)
+        p.wait()
+        return p.returncode
     else:
-        sub_test = os.path.join(util_dir, "test", "sub_test")
+        logger.write("[Starting sub_test {}]".format(date_str))
+        e = sub_test_script.run(compiler, args, tgt_platform)
+        return e
 
     if args.progress and test:
         sys.stderr.write("Testing {} ... \n".format(test))
-
-    # sub_test and create_graphs use a Popen() call in order to give real-time
-    # output to the command line, instead of logging all output in one huge
-    # block.
-    logger.write("[Starting {} {}]".format(sub_test, date_str))
-    p = subprocess.Popen([sub_test, compiler], stdout=subprocess.PIPE)
-    printout(p.stdout)
-    p.wait()
-    return p.returncode
 
 
 def generate_graphs(test=False):
@@ -632,16 +633,8 @@ def set_up_environment():
         if args.stdin_redirect:
             os.environ["CHPL_TEST_FORCE_STDIN_REDIRECT"] = "true"
 
-    # launcher timeout
-    if args.launcher_timeout:
-        os.environ["CHPL_LAUNCHER_TIMEOUT"] = str(args.launcher_timeout)
-
     # num trials
     os.environ["CHPL_TEST_NUM_TRIALS"] = str(args.num_trials)
-
-    # test root dir
-    if args.test_root_dir:
-        os.environ["CHPL_TEST_ROOT_DIR"] = str(args.test_root_dir)
 
     # jUnit
     if args.junit_xml_file:
@@ -866,7 +859,6 @@ def set_up_performance_testing_B():
                 sha_pef_keys_name, sha_out_name])
             logger.write(out)
         except:
-            logger.write(out)
             logger.write("[Error: Failed to save current sha to {}]"
                     .format(sha_dat_file_path))
 
@@ -1238,7 +1230,7 @@ def parser_setup():
     # launcher timeout
     parser.add_argument("-launchertimeout", "--launchertimeout", 
             action="store", dest="launcher_timeout",
-            help="rely on the luancher to enforce the timeout, not timedexec")
+            help="rely on the launcher to enforce the timeout, not timedexec")
     # no chpl home warning
     parser.add_argument("-no-chpl-home-warn", "--no-chpl-home-warn",
             action="store_false", dest="chpl_home_warn",
