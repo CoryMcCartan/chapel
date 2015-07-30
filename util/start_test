@@ -21,6 +21,9 @@ import atexit
 from chplenv import *
 import test.sub_test as sub_test_script
 
+
+RUNNING = False
+
 # PROGRAM ENTRY POINT
 def main():
     check_environment()
@@ -30,6 +33,9 @@ def main():
     global args
     (args, _) = parser.parse_known_args()
     parse_passthrough_opts()
+
+    global RUNNING # to suppress atexit handler if -h flag is set
+    RUNNING = True
 
     invocation_dir = os.getcwd()
 
@@ -418,7 +424,7 @@ def run(test=False):
         return p.returncode
     else:
         logger.write("[Starting sub_test {}]".format(date_str))
-        e = sub_test_script.run(compiler, args, tgt_platform)
+        e = sub_test_script.run(compiler, args, tgt_platform, logger)
         return e
 
     if args.progress and test:
@@ -475,7 +481,6 @@ def compiler_performance():
         logger.write(out)
         logger.write("[Success combining compiler performance dat files]")
     except:
-        logger.write(out)
         logger.write("[Error combining compiler performance dat files]")
 
     # create the graphs
@@ -596,13 +601,6 @@ def set_up_environment():
         os.environ["CHPL_MEM_LEAK_TESTING"] = "true"
         args.execopts += " --memLeaksLog=" + os.path.abspath(args.mem_leaks_log)
 
-    # pre-
-    if args.preexec:
-        os.environ["CHPL_SYSTEM_PREEXEC"] = args.syspreexec
-
-    if args.prediff:
-        os.environ["CHPL_SYSTEM_PREDIFF"] = args.sysprediff
-
     # compopts
     if args.compopts:
         args.compopts = "--cc-warnings " + args.compopts
@@ -622,19 +620,6 @@ def set_up_environment():
 
     if args.comp_performance_description:
         args.comp_performance = True
-
-    # compiler only
-    if args.comp_only:
-        os.environ["CHPL_COMPONLY"] = "true"
-
-    # stdin redirection
-    if args.no_stdin_redirect or args.stdin_redirect:
-        os.environ["CHPL_NO_STDIN_REDIRECT"] = "true"
-        if args.stdin_redirect:
-            os.environ["CHPL_TEST_FORCE_STDIN_REDIRECT"] = "true"
-
-    # num trials
-    os.environ["CHPL_TEST_NUM_TRIALS"] = str(args.num_trials)
 
     # jUnit
     if args.junit_xml_file:
@@ -697,16 +682,11 @@ def set_up_general():
             pass
         logger.write("[valgrind binary: {}]".format(binary))
         logger.write("[valgrind version: {}]".format(version))
-        os.environ["CHPL_TEST_VGRND_COMP"] = "on"
-        os.environ["CHPL_TEST_VGRND_EXE"] = "on"
     else:
-        os.environ["CHPL_TEST_VGRND_COMP"] = "off"
         if args.valgrind_exe:
             logger.write("[valgrind: EXE only]")
-            os.environ["CHPL_TEST_VGRND_EXE"] = "on"
         else:
             logger.write("[valgrind: OFF]")
-            os.environ["CHPL_TEST_VGRND_EXE"] = "off"
 
     # compiler
     global compiler
@@ -721,23 +701,19 @@ def set_up_performance_testing_A():
     # performance
     if args.performance:
         logger.write("[performance tests: ON]")
-        os.environ["CHPL_TEST_PERF"] = "on"
         if not args.perflabel == "perf":
             logger.write("[performance label: {}]".format(args.perflabel))
-        os.environ["CHPL_TEST_PERF_LABEL"] = args.perflabel
     else:
         logger.write("[performance tests: OFF]")
 
     # compiler performance
     if args.comp_performance:
         logger.write("[compiler performance tests: ON]")
-        os.environ["CHPL_TEST_COMP_PERF"] = "on"
     else:
         logger.write("[compiler performance tests: OFF]")
 
     # this is here and not in setupexecutables for legacy compatibility reasons
-    logger.write("[number of trials: {}]"
-            .format(os.environ["CHPL_TEST_NUM_TRIALS"]))
+    logger.write("[number of trials: {}]".format(args.num_trials))
 
     # graphs
     if args.gen_graphs:
@@ -793,8 +769,8 @@ def set_up_performance_testing_B():
         if "CHPL_TEST_COMP_PERF_DIR" in os.environ:
             comp_perf_dir = os.environ["CHPL_TEST_COMP_PERF_DIR"]
         else:
-            comp_perf_dir = os.path.join(home, ("test", "compperfdat", 
-                    "{}".format(compperf_test_name)))
+            comp_perf_dir = os.path.join(home, "test", "compperfdat", 
+                    "{}".format(compperf_test_name))
             logger.write("[Warning: CHPL_COMP_TEST_PERF DIR must be set for "
                     "generating compiler performance graphs, using default {}]"
                     .format(comp_perf_dir))
@@ -826,15 +802,15 @@ def set_up_performance_testing_B():
             args.gen_graph_opts = ""
 
     if args.performance or args.comp_performance:
-        # SHA for current run, in order to track dates to commits
         if args.performance:
             dat_dir = perf_dir
         else:
             dat_dir = comp_perf_dir
 
         if not os.path.isdir(dat_dir):
-            os.mkdir(dat_dir)
+            os.makedirs(dat_dir)
 
+        # SHA for current run, in order to track dates to commits
         sha_pef_keys_name = os.path.join(chpl_test_tmp_dir, "sha.perf_keys")
         with open(sha_pef_keys_name, "w") as shaPerfKeys:
             shaPerfKeys.write("sha ")
@@ -877,13 +853,10 @@ def set_up_executables():
 
     # log more options
     logger.write('[compopts: "{}"]'.format(args.compopts))
-    os.environ['COMPOPTS'] = args.compopts
 
     logger.write('[execopts: "{}"]'.format(args.execopts))
-    os.environ['EXECOPTS'] = args.execopts
 
     logger.write('[launchcmd: "{}"]'.format(args.launch_cmd))
-    os.environ['LAUNCHCMD'] = args.launch_cmd
 
     comm = chpl_comm.get()
     launcher = chpl_launcher.get()
@@ -922,8 +895,6 @@ def set_up_executables():
     else:
         logger.write('[numlocales: "{}"]'.format(args.num_locales))
 
-    os.environ["NUMLOCALES"] = str(args.num_locales)
-
     # pre-exec
     if args.preexec:
         if os.path.isfile(args.preexec) and os.access(args.preexec, os.X_OK):
@@ -933,7 +904,6 @@ def set_up_executables():
             logger.write("[Error: Cannot find or execute system-wide preexec:"
                     "{}".format(args.preexec))
             finish()
-        os.environ["CHPL_SYSTEM_PREEXEC"] = args.preexec
 
     # pre-diff
     if args.prediff:
@@ -944,7 +914,6 @@ def set_up_executables():
             logger.write("[Error: Cannot find or execute system-wide prediff: "
                     "{}".format(args.prediff))
             finish()
-        os.environ["CHPL_SYSTEM_PREDIFF"] = args.prediff
 
 
 def auto_generate_tests():
@@ -1089,7 +1058,7 @@ def check_for_duplicates():
 
 @atexit.register
 def cleanup():
-    if os.path.isdir(chpl_test_tmp_dir):
+    if os.path.isdir(chpl_test_tmp_dir) and RUNNING:
         logger.write("[Removing {} directory]".format(chpl_test_tmp_dir))
         shutil.rmtree(chpl_test_tmp_dir)
 

@@ -134,13 +134,22 @@ import re
 import shlex
 import datetime
 import atexit
+import logging
 
 
-def run(_compiler, _args, _platform):
-    global compiler, args, platform
-    args = _args
+RUNNING = False
+
+def run(_compiler, _args, _platform, _logger):
+    global RUNNING # to suppress atexit handler 
+    RUNNING = True
+
+    global compiler, st_args, platform
+    st_args = _args
     compiler = _compiler
     platform = _platform
+
+    global logger
+    logger = _logger
 
     global localdir, sub_test_start_time
     localdir = ''
@@ -162,6 +171,8 @@ def run(_compiler, _args, _platform):
             systemPreexec) = pre_files()
 
     start_tests()
+    
+    return 0
 
 
 def get_settings():
@@ -219,7 +230,7 @@ def get_settings():
     # If user specified a different test directory (e.g. with --test-root flag on
     # start_test), use it instead.
     global test_root_dir
-    test_root_dir = args.test_root_dir 
+    test_root_dir = st_args.test_root_dir 
     if test_root_dir is not None:
         testdir = test_root_dir
 
@@ -239,7 +250,7 @@ def get_settings():
 
     global useLauncherTimeout
     # Use the launcher walltime option for timeout
-    useLauncherTimeout = args.launcher_timeout
+    useLauncherTimeout = st_args.launcher_timeout
 
     global uniquifyTests
     uniquifyTests = False
@@ -270,13 +281,13 @@ def get_settings():
 
 def get_directory_options():
     global perftest, perflabel, perfdir, perfdescription
-    if args.performance:
+    if st_args.performance:
         perftest = True
-        perflabel = args.perflabel 
+        perflabel = st_args.perflabel 
         perfdir = os.getenv('CHPL_TEST_PERF_DIR')
-        perfdescription = args.performance_description
+        perfdescription = st_args.performance_description
         if perfdescription != "" and perfdescription != "default":
-            sys.stdout.write('Setting perfdir to %s from %s because of additional perf description\n' %(os.path.join(perfdir, perfdescription), perfdir))
+            logger.write('Setting perfdir to %s from %s because of additional perf description' %(os.path.join(perfdir, perfdescription), perfdir))
             perfdir = os.path.join(perfdir, perfdescription)
         else:
             perfdescription= ''
@@ -299,7 +310,7 @@ def get_directory_options():
 
     # Get global timeout
     global globalTimeout
-    if args.valgrind:
+    if st_args.valgrind:
         globalTimeout=1000
     else:
         globalTimeout=300
@@ -366,7 +377,7 @@ def get_directory_options():
         # globalNumlocales.strip(globalNumlocales)
     else:
         # start_test sets this, so we'll assume it's right :)
-        globalNumlocales = args.num_locales
+        globalNumlocales = st_args.num_locales
 
     global globalCatfiles
 
@@ -383,7 +394,7 @@ def valgrind_setup():
 
     chpl_valgrind_opts = os.getenv('CHPL_VALGRIND_OPTS', '--tool=memcheck')
 
-    if args.valgrind:
+    if st_args.valgrind:
         valgrindcomp = 'valgrind'
         valgrindcompopts = chpl_valgrind_opts.split()
         valgrindcompopts += ['--gen-suppressions=all']
@@ -393,7 +404,7 @@ def valgrind_setup():
         valgrindcomp = None
         valgrindcompopts = None
 
-    if (args.valgrind_exe and vgrbin):
+    if (st_args.valgrind_exe and vgrbin):
         valgrindbin = 'valgrind'
         valgrindbinopts = chpl_valgrind_opts.split()+['-q']
         if (chplcomm != 'none'):
@@ -404,19 +415,19 @@ def valgrind_setup():
 
 
 def setup():
-    global testfutures, testnotests, launchcmd, futureSuffix, printpassesFile
+    global testfutures, testnotests, launchcmd, futureSuffix, printpassesfile
     global compperftest, compperfdir, keyfile, tempDatFilesDir
 
     testfutures=string.atoi(os.getenv('CHPL_TEST_FUTURES','0'))
 
     testnotests=os.getenv('CHPL_TEST_NOTESTS')
 
-    launchcmd=os.getenv('LAUNCHCMD')
+    launchcmd = st_args.launch_cmd
 
     futureSuffix='.future'
 
     printpassesfile = None
-    if args.comp_performance:
+    if st_args.comp_performance:
         compperftest=True
         
         # check for the main compiler performance directory
@@ -465,7 +476,7 @@ def get_compopts():
     elif os.access('./COMPOPTS',os.R_OK):
         directoryCompopts=ReadFileWithComments('./COMPOPTS')
 
-    envCompopts = args.compopts
+    envCompopts = st_args.compopts
     if envCompopts is not None:
         envCompopts = shlex.split(envCompopts)
     else:
@@ -505,7 +516,7 @@ def get_execopts():
     if perftest and os.access(PerfDirFile('NUMTRIALS'), os.R_OK): # ./PERFNUMTRIALS
         globalNumTrials = ReadIntegerValue(PerfDirFile('NUMTRIALS'), localdir)
     else:
-        globalNumTrials = int(args.num_trials)
+        globalNumTrials = int(st_args.num_trials)
 
     if os.access('./EXECENV',os.R_OK):
         globalExecenv = ReadFileWithComments('./EXECENV')
@@ -521,7 +532,7 @@ def get_execopts():
     else:
         globalExecopts = list()
 
-    envExecopts = args.execopts
+    envExecopts = st_args.execopts
 
     return (globalNumTrials, globalExecenv, globalExecopts, envExecopts)
 
@@ -547,13 +558,13 @@ def pre_files():
         globalPreexec=None
 
     # Get the system-wide preexec
-    systemPreexec = args.preexec
+    systemPreexec = st_args.preexec
     if systemPreexec is not None:
         if not os.access(systemPreexec, os.R_OK|os.X_OK):
             Fatal("Cannot execute system-wide preexec '{0}'".format(systemPreexec))
 
     # Get the system-wide prediff
-    systemPrediff = args.prediff
+    systemPrediff = st_args.prediff
     if systemPrediff:
       if not os.access(systemPrediff,os.R_OK|os.X_OK):
         Fatal('Cannot execute system-wide prediff \''+systemPrediff+'\'')
@@ -563,11 +574,11 @@ def pre_files():
 
 
 def start_tests():
-    sys.stdout.write('[Starting subtest - %s]\n'%(time.strftime('%a %b %d %H:%M:%S %Z %Y', time.localtime())))
+    logger.write('[Starting subtest - %s]'%(time.strftime('%a %b %d %H:%M:%S %Z %Y', time.localtime())))
     if systemPreexec:
-        sys.stdout.write("[system-wide preexec: '{0}']\n".format(systemPreexec))
+        logger.write("[system-wide preexec: '{0}']".format(systemPreexec))
     if systemPrediff:
-        sys.stdout.write('[system-wide prediff: \'%s\']\n'%(systemPrediff))
+        logger.write('[system-wide prediff: \'%s\']'%(systemPrediff))
 
     # consistently look only at the files in the current directory
     dirlist=os.listdir(".")
@@ -583,12 +594,12 @@ def start_tests():
     original_compiler = compiler
 
     for testname in testsrc:
-        sys.stdout.flush()
+        logger.flush()
 
         compiler = original_compiler
 
         # print testname
-        sys.stdout.write('[test: %s/%s]\n'%(localdir,testname))
+        logger.write('[test: %s/%s]'%(localdir,testname))
         test_filename = re.match(r'^(.*)\.(?:chpl|test\.c)$', testname).group(1)
         execname = test_filename
         if uniquifyTests:
@@ -623,7 +634,7 @@ def start_tests():
 
         if (perftest and (test_filename_files.count(PerfTFile(test_filename,'keys'))==0) and
             (test_filename_files.count(PerfTFile(test_filename,'execopts'))==0)):
-            sys.stdout.write('[Skipping noperf test: %s/%s]\n'%(localdir,test_filename))
+            logger.write('[Skipping noperf test: %s/%s]'%(localdir,test_filename))
             continue # on to next test
 
         timeout = directoryTimeout
@@ -648,7 +659,7 @@ def start_tests():
         prediff=None
         preexec=None
 
-        if os.getenv('CHPL_NO_STDIN_REDIRECT') == None:
+        if not st_args.no_stdin_redirect and not st_args.stdin_redirect:
             redirectin = '/dev/null'
         else:
             redirectin = None
@@ -666,7 +677,6 @@ def start_tests():
         do_not_test=False
         for f in test_filename_files:
             (root, suffix) = os.path.splitext(f)
-            # sys.stdout.write("**** %s ****\n"%(f))
 
             # 'f' is of the form test_filename.SOMETHING.suffix,
             # not pertinent at the moment
@@ -683,7 +693,7 @@ def start_tests():
 
             elif (suffix=='.notest' and (os.access(f, os.R_OK) and
                                          testnotests=='0')):
-                sys.stdout.write('[Skipping notest test: %s/%s]\n'%(localdir,test_filename))
+                logger.write('[Skipping notest test: %s/%s]'%(localdir,test_filename))
                 do_not_test=True
                 break
 
@@ -696,10 +706,10 @@ def start_tests():
                     if skiptest.strip() != "False":
                         skipme = skiptest.strip() == "True" or int(skiptest) == 1
                     if skipme:
-                        sys.stdout.write('[Skipping test based on .skipif environment settings: %s/%s]\n'%(localdir,test_filename))
+                        logger.write('[Skipping test based on .skipif environment settings: %s/%s]'%(localdir,test_filename))
                         do_not_test=True
                 except ValueError:
-                    sys.stdout.write('[Error processing .skipif file %s/%s]\n'%(localdir,f))
+                    logger.write('[Error processing .skipif file %s/%s]'%(localdir,f))
                     do_not_test=True
                 if do_not_test:
                     break
@@ -721,11 +731,11 @@ def start_tests():
                                     break
                         futuretest='Suppress (' + suppressline + ') '
                 except ValueError:
-                    sys.stdout.write('[Error processing .suppressif file %s/%s]\n'%(localdir,f))
+                    logger.write('[Error processing .suppressif file %s/%s]'%(localdir,f))
 
             elif (suffix == timeoutsuffix and os.access(f, os.R_OK)):
                 timeout=ReadIntegerValue(f, localdir)
-                sys.stdout.write('[Overriding default timeout with %d]\n'%(timeout))
+                logger.write('[Overriding default timeout with %d]'%(timeout))
             elif (perftest and suffix == PerfSfx('timeexec') and os.access(f, os.R_OK)): #e.g. .perftimeexec
                 timer = GetTimer(f)
 
@@ -770,7 +780,7 @@ def start_tests():
 
             elif (suffix=='.stdin' and os.access(f, os.R_OK)):
                 if redirectin == None:
-                    sys.stdout.write('[Skipping test with .stdin input since -nostdinredirect is given: %s/%s]\n'%(localdir,test_filename))
+                    logger.write('[Skipping test with .stdin input since -nostdinredirect is given: %s/%s]'%(localdir,test_filename))
                     do_not_test=True
                     break
                 else:
@@ -793,23 +803,23 @@ def start_tests():
 
         # 0: test no futures
         if testfutures == 0 and testfuturesfile == True:
-            sys.stdout.write('[Skipping future test: %s/%s]\n'%(localdir,test_filename))
+            logger.write('[Skipping future test: %s/%s]'%(localdir,test_filename))
             continue # on to next test
         # 1: test all futures
         elif testfutures == 1:
             pass
         # 2: test only futures
         elif testfutures == 2 and testfuturesfile == False:
-            sys.stdout.write('[Skipping non-future test: %s/%s]\n'%(localdir,test_filename))
+            logger.write('[Skipping non-future test: %s/%s]'%(localdir,test_filename))
             continue # on to next test
         # 3: test futures that have a .skipif file
         elif testfutures == 3 and testfuturesfile == True and testskipiffile == False:
-            sys.stdout.write('[Skipping future test without a skipif: %s/%s]\n'%(localdir,test_filename))
+            logger.write('[Skipping future test without a skipif: %s/%s]'%(localdir,test_filename))
             continue # on to next test
 
         # c tests don't have a way to launch themselves
         if is_c_test and chpllauncher != 'none':
-            sys.stdout.write('[Skipping c test: %s/%s]\n'%(localdir,test_filename))
+            logger.write('[Skipping c test: %s/%s]'%(localdir,test_filename))
             continue
 
         # Set numlocales
@@ -822,7 +832,7 @@ def start_tests():
         # want to run it once
         if (timeout > globalTimeout):
             if numTrials != 1:
-                sys.stdout.write('[Lowering number of trials for {0} to 1]\n'.format(test_filename))
+                logger.write('[Lowering number of trials for {0} to 1]'.format(test_filename))
                 numTrials = 1
 
         # Get list of test specific compiler options
@@ -833,13 +843,13 @@ def start_tests():
         if test_is_chpldoc and os.access(chpldoc_opts_filename, os.R_OK):
             compoptslist = ReadFileWithComments(chpldoc_opts_filename, False)
             if not compoptslist:
-                sys.stdout.write('[Warning: ignoring an empty chpldocopts file %s]\n' %
+                logger.write('[Warning: ignoring an empty chpldocopts file %s]' %
                                  (test_filename+compoptssuffix))
         elif os.access(test_filename+compoptssuffix, os.R_OK):
             compoptslist = ReadFileWithComments(test_filename+compoptssuffix, False)
             if not compoptslist:
                 # cf. for execoptslist no warning is issued
-                sys.stdout.write('[Warning: ignoring an empty compopts file %s]\n'%(test_filename+compoptssuffix))
+                logger.write('[Warning: ignoring an empty compopts file %s]'%(test_filename+compoptssuffix))
 
         # Merge global compopts list with local compopts.
         # Use the "product" of the two if they are both provided.
@@ -880,18 +890,13 @@ def start_tests():
             # cf. for compoptslist, a warning is issued in this case
             execoptslist.append(' ')
 
-        if (os.getenv('CHPL_TEST_INTERP')=='on' and
-            (noexecfile or testfuturesfile or execoptsfile)):
-            sys.stdout.write('[Skipping interpretation of: %s/%s]\n'%(localdir,test_filename))
-            continue # on to next test
-
         clist = list()
         curFileTestStart = time.time()
 
         # For all compopts + execopts combos..
         compoptsnum = 0
         for compopts in compoptslist:
-            sys.stdout.flush()
+            logger.flush()
             del clist
             # use the remaining portion as a .good file for executing tests
             #  clist will be *added* to execopts if it is empty, or just used
@@ -915,14 +920,14 @@ def start_tests():
             # Run the precompile script
             #
             if globalPrecomp:
-                sys.stdout.write('[Executing ./PRECOMP]\n')
-                sys.stdout.flush()
+                logger.write('[Executing ./PRECOMP]')
+                logger.flush()
                 subprocess.Popen(['./PRECOMP',
                                  execname,complog,compiler]).wait()
 
             if precomp:
-                sys.stdout.write('[Executing precomp %s.precomp]\n'%(test_filename))
-                sys.stdout.flush()
+                logger.write('[Executing precomp %s.precomp]'%(test_filename))
+                logger.flush()
                 subprocess.Popen(['./'+test_filename+'.precomp',
                                  execname,complog,compiler]).wait()
 
@@ -956,9 +961,9 @@ def start_tests():
                     cmd = compiler
 
                     if which(cmd) is None:
-                        sys.stdout.write(
+                        logger.write(
                             '[Warning: Could not find chpldoc, skipping test '
-                            '{0}/{1}]\n'.format(localdir, test_filename))
+                            '{0}/{1}]'.format(localdir, test_filename))
                         break
 
                 if valgrindcomp:
@@ -987,11 +992,10 @@ def start_tests():
             #
             comptimeout = 2*timeout
             cmd=ShellEscapeCommand(cmd);
-            sys.stdout.write('[Executing compiler %s'%(cmd))
+            loggerout = '[Executing compiler %s'%(cmd)
             if args:
-                sys.stdout.write(' {}'.format(' '.join(args)))
-            sys.stdout.write(' < {}]\n'.format(compstdin))
-            sys.stdout.flush()
+                loggerout += ' {}'.format(' '.join(args))
+            logger.write('{} < {}]'.format(loggerout, compstdin))
             if useTimedExec:
                 wholecmd = cmd+' '+' '.join(map(ShellEscape, args))
                 p = subprocess.Popen([timedexec, str(comptimeout), wholecmd],
@@ -1002,10 +1006,10 @@ def start_tests():
                 status = p.returncode
 
                 if status == 222:
-                    sys.stdout.write('{}[Error: Timed out compilation for {}/{}'
+                    loggerout = ('{}[Error: Timed out compilation for {}/{}'
                             .format(futuretest, localdir, test_filename))
-                    printTestVariation(compoptsnum, compoptslist);
-                    sys.stdout.write(']\n')
+                    loggerout += printTestVariation(compoptsnum, compoptslist)
+                    logger.write('{}]'.format(loggerout))
                     cleanup(execname)
                     cleanup(printpassesfile)
                     continue # on to next compopts
@@ -1017,10 +1021,10 @@ def start_tests():
                 try:
                     output = SuckOutputWithTimeout(p.stdout, comptimeout)
                 except ReadTimeoutException:
-                    sys.stdout.write('%s[Error: Timed out compilation for %s/%s'%
+                    loggerout = ('%s[Error: Timed out compilation for %s/%s'%
                                      (futuretest, localdir, test_filename))
-                    printTestVariation(compoptsnum, compoptslist);
-                    sys.stdout.write(']\n')
+                    loggerout += printTestVariation(compoptsnum, compoptslist);
+                    logger.write('{}]'.format(loggerout))
                     KillProc(p, killtimeout)
                     cleanup(execname)
                     cleanup(printpassesfile)
@@ -1033,7 +1037,7 @@ def start_tests():
             if compoptsnum != 0:
                 test_name += ' (compopts: {0})'.format(compoptsnum)
 
-            print('[Elapsed compilation time for "{0}" - {1:.3f} '
+            logger.write('[Elapsed compilation time for "{0}" - {1:.3f} '
                 'seconds]'.format(test_name, elapsedCompTime))
 
             # remove some_file: output from C compilers
@@ -1051,9 +1055,9 @@ def start_tests():
 
                 # Compare compiler output with expected program output
                 if catfiles:
-                    sys.stdout.write('[Concatenating extra files: %s]\n'%
+                    logger.write('[Concatenating extra files: %s]'%
                                      (test_filename+'.catfiles'))
-                    sys.stdout.flush()
+                    logger.flush()
                     output+=subprocess.Popen(['cat']+catfiles.split(),
                                              stdout=subprocess.PIPE,
                                              stderr=subprocess.STDOUT).communicate()[0]
@@ -1064,16 +1068,16 @@ def start_tests():
                 complogfile.close()
 
                 if globalPrediff:
-                    sys.stdout.write('[Executing ./PREDIFF]\n')
-                    sys.stdout.flush()
+                    logger.write('[Executing ./PREDIFF]')
+                    logger.flush()
                     subprocess.Popen(['./PREDIFF',
                                       execname,complog,compiler,
                                       ' '.join(env_compopts)+' '+compopts,
                                       ' '.join(args)]).wait()
 
                 if prediff:
-                    sys.stdout.write('[Executing prediff %s.prediff]\n'%(test_filename))
-                    sys.stdout.flush()
+                    logger.write('[Executing prediff %s.prediff]'%(test_filename))
+                    logger.flush()
                     subprocess.Popen(['./'+test_filename+'.prediff',
                                       execname,complog,compiler,
                                       ' '.join(env_compopts)+' '+compopts,
@@ -1091,12 +1095,11 @@ def start_tests():
                     basename = explicitcompgoodfile.replace('.good', '')
 
                 goodfile = FindGoodFile(basename)
-                # sys.stdout.write('default goodfile=%s\n'%(goodfile))
 
                 if not os.path.isfile(goodfile) or not os.access(goodfile, os.R_OK):
-                    sys.stdout.write('[Error cannot locate compiler output comparison file %s/%s]\n'%(localdir, goodfile))
-                    sys.stdout.write('[Compiler output was as follows:]\n')
-                    sys.stdout.write(origoutput)
+                    logger.write('[Error cannot locate compiler output comparison file %s/%s]'%(localdir, goodfile))
+                    logger.write('[Compiler output was as follows:]')
+                    logger.write(origoutput)
                     cleanup(execname)
                     cleanup(printpassesfile)
                     continue # on to next compopts
@@ -1104,13 +1107,13 @@ def start_tests():
                 result = DiffFiles(goodfile, complog)
                 if result == 0:
                     os.unlink(complog)
-                    sys.stdout.write('%s[Success '%(futuretest))
+                    loggerout = '%s[Success '%(futuretest)
                 else:
-                    sys.stdout.write('%s[Error '%(futuretest))
-                sys.stdout.write('matching compiler output for %s/%s'%
+                    loggerout = '%s[Error '%(futuretest)
+                loggerout += ('matching compiler output for %s/%s'%
                                      (localdir, test_filename))
-                printTestVariation(compoptsnum, compoptslist);
-                sys.stdout.write(']\n')
+                loggerout += printTestVariation(compoptsnum, compoptslist);
+                logger.write('{}]'.format(loggerout))
 
                 if (result != 0 and futuretest != ''):
                     badfile=test_filename+'.bad'
@@ -1118,13 +1121,13 @@ def start_tests():
                         badresult = DiffBadFiles(badfile, complog)
                         if badresult == 0:
                             os.unlink(complog);
-                            sys.stdout.write('[Clean match against .bad file ')
+                            loggerout = '[Clean match against .bad file '
                         else:
                             # bad file doesn't match, which is bad
-                            sys.stdout.write('[Error matching .bad file ')
-                        sys.stdout.write('for %s/%s'%(localdir, test_filename))
-                        printTestVariation(compoptsnum, compoptslist);
-                        sys.stdout.write(']\n');
+                            loggerout = '[Error matching .bad file '
+                        loggerout += 'for %s/%s'%(localdir, test_filename)
+                        loggerout += printTestVariation(compoptsnum, compoptslist)
+                        logger.write('{}]'.format(loggerout))
 
                 cleanup(execname)
                 cleanup(printpassesfile)
@@ -1165,7 +1168,7 @@ def start_tests():
             #
             # Compile successful
             #
-            sys.stdout.write('[Success compiling %s/%s]\n'%(localdir, test_filename))
+            logger.write('[Success compiling %s/%s]'%(localdir, test_filename))
 
             # Note that compiler performance only times successful compilations. 
             # Tests that are designed to fail before compilation is complete will 
@@ -1176,13 +1179,13 @@ def start_tests():
                 if not os.path.isdir(compperfdir) and not os.path.isfile(compperfdir):
                     os.makedirs(compperfdir)
                 if not os.access(compperfdir, os.R_OK|os.X_OK):
-                    sys.stdout.write('[Error creating compiler performance test directory %s]\n'%(compperfdir))
+                    logger.write('[Error creating compiler performance test directory %s]'%(compperfdir))
                     timePasses = False
 
                 if not os.path.isdir(tempDatFilesDir) and not os.path.isfile(tempDatFilesDir):
                     os.makedirs(tempDatFilesDir)
                 if not os.access(compperfdir, os.R_OK|os.X_OK):
-                    sys.stdout.write('[Error creating compiler performance temp dat file test directory %s]\n'%(tempDatFilesDir))
+                    logger.write('[Error creating compiler performance temp dat file test directory %s]'%(tempDatFilesDir))
                     timePasses = False
 
                 # so long as we have to the directories 
@@ -1200,21 +1203,21 @@ def start_tests():
                     datFileName = localdir.replace('/', '~~') + '~~' + test_filename + compoptsstring
 
                     # computePerfStats for the current test
-                    sys.stdout.write('[Executing computePerfStats %s %s %s %s %s]\n'%(datFileName, tempDatFilesDir, keyfile, printpassesfile, 'False'))
-                    sys.stdout.flush()
+                    logger.write('[Executing computePerfStats %s %s %s %s %s]'%(datFileName, tempDatFilesDir, keyfile, printpassesfile, 'False'))
+                    logger.flush()
                     p = subprocess.Popen([utildir+'/test/computePerfStats', datFileName, tempDatFilesDir, keyfile, printpassesfile, 'False'], stdout=subprocess.PIPE)
                     compkeysOutput = p.communicate()[0]
                     datFiles = [tempDatFilesDir+'/'+datFileName+'.dat',  tempDatFilesDir+'/'+datFileName+'.error']
                     status = p.returncode
 
                     if status == 0:
-                        sys.stdout.write('[Success finding compiler performance keys for %s/%s]\n'% (localdir, test_filename))
+                        logger.write('[Success finding compiler performance keys for %s/%s]'% (localdir, test_filename))
                     else:
-                        sys.stdout.write('[Error finding compiler performance keys for %s/%s.]\n'% (localdir, test_filename))
+                        logger.write('[Error finding compiler performance keys for %s/%s.]'% (localdir, test_filename))
                         printTestVariation(compoptsnum, compoptslist);
-                        sys.stdout.write('computePerfStats output was:\n%s\n'%(compkeysOutput))
-                        sys.stdout.flush()
-                        sys.stdout.write('Deleting .dat files for %s/%s because of failure to find all keys\n'%(localdir, test_filename))
+                        logger.write('computePerfStats output was:\n%s'%(compkeysOutput))
+                        logger.flush()
+                        logger.write('Deleting .dat files for %s/%s because of failure to find all keys'%(localdir, test_filename))
                         for datFile in datFiles:
                             if os.path.isfile(datFile):
                                 os.unlink(datFile)
@@ -1223,8 +1226,8 @@ def start_tests():
                 cleanup(printpassesfile)
 
 
-            if os.getenv('CHPL_COMPONLY'):
-                sys.stdout.write('[Note: Not executing or comparing the output due to -noexec flags]\n')
+            if st_args.comp_only:
+                logger.write('[Note: Not executing or comparing the output due to -noexec flags]')
                 cleanup(execname)
                 continue # on to next compopts
             explicitcompgoodfile = None
@@ -1236,7 +1239,7 @@ def start_tests():
             redirectin_set_in_loop = False
             redirectin_original_value = redirectin
             for texecopts in execoptslist:
-                sys.stdout.flush()
+                logger.flush()
 
                 # Reset redirectin, in case execopts has multiple lines with
                 # different stdin files.
@@ -1265,20 +1268,20 @@ def start_tests():
                 del tlist
 
                 if systemPreexec:
-                    sys.stdout.write('[Executing system-wide preexec]\n')
-                    sys.stdout.flush()
+                    logger.write('[Executing system-wide preexec]')
+                    logger.flush()
                     subprocess.Popen([systemPreexec,
                                       execname,execlog,compiler]).wait()
 
                 if globalPreexec:
-                    sys.stdout.write('[Executing ./PREEXEC]\n')
-                    sys.stdout.flush()
+                    logger.write('[Executing ./PREEXEC]')
+                    logger.flush()
                     subprocess.Popen(['./PREEXEC',
                                       execname,execlog,compiler]).wait()
 
                 if preexec:
-                    sys.stdout.write('[Executing preexec %s.preexec]\n'%(test_filename))
-                    sys.stdout.flush()
+                    logger.write('[Executing preexec %s.preexec]'%(test_filename))
+                    logger.flush()
                     subprocess.Popen(['./'+test_filename+'.preexec',
                                       execname,execlog,compiler]).wait()
 
@@ -1288,11 +1291,11 @@ def start_tests():
                         pre_exec_output = exec_log_file.read()
 
                 if not os.access(execname, os.R_OK|os.X_OK):
-                    sys.stdout.write('%s[Error could not locate executable %s for %s/%s'%
+                    loggerout = ('%s[Error could not locate executable %s for %s/%s'%
                                      (futuretest, execname, localdir, test_filename))
-                    printTestVariation(compoptsnum, compoptslist,
+                    loggerout += printTestVariation(compoptsnum, compoptslist,
                                        execoptsnum, execoptslist)
-                    sys.stdout.write(']\n')
+                    logger.write('{}]'.format(loggerout))
                     break; # on to next compopts
 
                 # When doing whole program execution, we want to time the _real
@@ -1322,7 +1325,7 @@ def start_tests():
                     launchcmd_exec_time_file = execname + '_launchcmd_exec_time.txt'
                     os.environ['CHPL_LAUNCHCMD_EXEC_TIME_FILE'] = launchcmd_exec_time_file
 
-                    # save old cmd and args and add them after launchcmd args.
+                    # save old cmd and args and add them after launchcmd st_args.
                     oldcmd = cmd
                     oldargs = list(args)
                     launch_cmd_list = shlex.split(launchcmd)
@@ -1338,10 +1341,9 @@ def start_tests():
                     args+=shlex.split(envExecopts)
                 if lastexecopts:
                     args += lastexecopts
-                # sys.stdout.write("args=%s\n"%(args))
 
                 if len(args) >= 2 and '<' in args:
-                  redirIdx = args.index('<')
+                  redirIdx = st_args.index('<')
                   execOptRedirect = args[redirIdx + 1]
                   args.pop(redirIdx+1)
                   args.pop(redirIdx)
@@ -1349,7 +1351,7 @@ def start_tests():
                       # It is a little unfortunate that we compile the test only to skip it here.
                       # In order to prevent this, the logic for combining all the places execpopts
                       # come from and checking for '<' would have to be factored out or duplicated
-                      print('[Skipping test with stdin redirection ("<") in execopts since '
+                      logger.write('[Skipping test with stdin redirection ("<") in execopts since '
                             '-nostdinredirect is given {0}/{1}]'.format(localdir, test_filename))
                       break;
                   elif redirectin == "/dev/null":
@@ -1357,10 +1359,10 @@ def start_tests():
                       redirectin = execOptRedirect
                       redirectin_set_in_loop = True
                     else:
-                      sys.stdout.write('[Error: redirection file %s does not exist]\n'%(execOptRedirect))
+                      logger.write('[Error: redirection file %s does not exist]'%(execOptRedirect))
                       break
                   else:
-                    sys.stdout.write('[Error: a redirection file already exists: %s]\n'%(redirectin))
+                    logger.write('[Error: a redirection file already exists: %s]'%(redirectin))
                     break
 
                 #
@@ -1369,11 +1371,11 @@ def start_tests():
                 for count in xrange(numTrials):
                     exectimeout = False  # 'exectimeout' is specific to one trial of one execopt setting
                     launcher_error = ''  # used to suppress output/timeout errors whose root cause is a launcher error
-                    sys.stdout.write('[Executing program %s %s'%(cmd, ' '.join(args)))
+                    loggerout = '[Executing program %s %s'%(cmd, ' '.join(args))
                     if redirectin:
-                        sys.stdout.write(' < %s'%(redirectin))
-                    sys.stdout.write(']\n')
-                    sys.stdout.flush()
+                        loggerout += ' < %s'%(redirectin)
+                    logger.write('{}]'.format(loggerout))
+                    logger.flush()
 
                     execStart = time.time()
                     if useLauncherTimeout:
@@ -1400,13 +1402,13 @@ def start_tests():
                             launcher_error = 'Timed out executing program'
 
                         if launcher_error:
-                            sys.stdout.write('%s[Error: %s %s/%s'%
+                            loggerout = ('%s[Error: %s %s/%s'%
                                             (futuretest, launcher_error, localdir, test_filename))
-                            printTestVariation(compoptsnum, compoptslist,
+                            loggerout += printTestVariation(compoptsnum, compoptslist,
                                                execoptsnum, execoptslist);
-                            sys.stdout.write(']\n')
-                            sys.stdout.write('[Execution output was as follows:]\n')
-                            sys.stdout.write(trim_output(output))
+                            logger.write('{}]'.format(loggerout))
+                            logger.write('[Execution output was as follows:]')
+                            logger.write(trim_output(output))
 
                     elif useTimedExec:
                         wholecmd = cmd+' '+' '.join(map(ShellEscape, args))
@@ -1425,20 +1427,20 @@ def start_tests():
 
                         if status == 222:
                             exectimeout = True
-                            sys.stdout.write('%s[Error: Timed out executing program %s/%s'%
+                            loggerout = ('%s[Error: Timed out executing program %s/%s'%
                                             (futuretest, localdir, test_filename))
-                            printTestVariation(compoptsnum, compoptslist,
+                            loggerout += printTestVariation(compoptsnum, compoptslist,
                                                execoptsnum, execoptslist);
-                            sys.stdout.write(']\n')
-                            sys.stdout.write('[Execution output was as follows:]\n')
-                            sys.stdout.write(trim_output(output))
+                            logger.write('{}]'.format(loggerout))
+                            logger.write('[Execution output was as follows:]')
+                            logger.write(trim_output(output))
                         else:
                             # for perf runs print out the 5 processes with the
                             # highest cpu usage. This should help identify if other
                             # processes might have interfered with a test.
                             if perftest:
-                                print('[Reporting processes with top 5 highest cpu usages]')
-                                sys.stdout.flush()
+                                logger.write('[Reporting processes with top 5 highest cpu usages]')
+                                logger.flush()
                                 psCom = 'ps ax -o user,pid,pcpu,command '
                                 subprocess.call(psCom + '| head -n 1', shell=True)
                                 subprocess.call(psCom + '| tail -n +2 | sort -r -k 3 | head -n 5', shell=True)
@@ -1458,11 +1460,11 @@ def start_tests():
                             output = SuckOutputWithTimeout(p.stdout, timeout)
                         except ReadTimeoutException:
                             exectimeout = True
-                            sys.stdout.write('%s[Error: Timed out executing program %s/%s'%
+                            loggerout = ('%s[Error: Timed out executing program %s/%s'%
                                             (futuretest, localdir, test_filename))
-                            printTestVariation(compoptsnum, compoptslist,
+                            loggerout += printTestVariation(compoptsnum, compoptslist,
                                                execoptsnum, execoptslist);
-                            sys.stdout.write(']\n')
+                            logger.write('{}]'.format(loggerout))
                             KillProc(p, killtimeout)
 
                         status = p.returncode
@@ -1481,25 +1483,25 @@ def start_tests():
                         with open(launchcmd_exec_time_file, 'r') as fp:
                             try:
                                 launchcmd_exec_time = float(fp.read())
-                                print('[launchcmd reports elapsed execution time '
+                                logger.write('[launchcmd reports elapsed execution time '
                                     'for "{0}" - {1:.3f} seconds]'
                                     .format(test_name, launchcmd_exec_time))
                             except ValueError:
-                                print('Could not parse launchcmd time file '
+                                logger.write('Could not parse launchcmd time file '
                                     '{0}'.format(launchcmd_exec_time_file))
                         os.unlink(launchcmd_exec_time_file)
 
-                    print('[Elapsed execution time for "{0}" - {1:.3f} '
+                    logger.write('[Elapsed execution time for "{0}" - {1:.3f} '
                         'seconds]'.format(test_name, elapsedExecTime))
 
                     if execTimeWarnLimit and elapsedExcTime > execTimeWarnLimit:
-                        sys.stdout.write('[Warning: %s/%s took over %.0f seconds to '
-                            'execute]\n' %(localdir, test_filename, execTimeWarnLimit))
+                        logger.write('[Warning: %s/%s took over %.0f seconds to '
+                            'execute]' %(localdir, test_filename, execTimeWarnLimit))
 
                     if catfiles:
-                        sys.stdout.write('[Concatenating extra files: %s]\n'%
+                        logger.write('[Concatenating extra files: %s]'%
                                         (test_filename+'.catfiles'))
-                        sys.stdout.flush()
+                        logger.flush()
                         output+=subprocess.Popen(['cat']+catfiles.split(),
                                                 stdout=subprocess.PIPE,
                                                 stderr=subprocess.STDOUT).communicate()[0]
@@ -1511,9 +1513,9 @@ def start_tests():
 
                     if not exectimeout and not launcher_error:
                         if systemPrediff:
-                            sys.stdout.write('[Executing system-wide prediff]\n')
-                            sys.stdout.flush()
-                            sys.stdout.write(subprocess.Popen([systemPrediff,
+                            logger.write('[Executing system-wide prediff]')
+                            logger.flush()
+                            logger.write(subprocess.Popen([systemPrediff,
                                                               execname,execlog,compiler,
                                                               ' '.join(env_compopts)+
                                                               ' '+compopts,
@@ -1522,9 +1524,9 @@ def start_tests():
                                             communicate()[0])
 
                         if globalPrediff:
-                            sys.stdout.write('[Executing ./PREDIFF]\n')
-                            sys.stdout.flush()
-                            sys.stdout.write(subprocess.Popen(['./PREDIFF',
+                            logger.write('[Executing ./PREDIFF]')
+                            logger.flush()
+                            logger.write(subprocess.Popen(['./PREDIFF',
                                                               execname,execlog,compiler,
                                                               ' '.join(env_compopts)+
                                                               ' '+compopts,
@@ -1533,9 +1535,9 @@ def start_tests():
                                             communicate()[0])
 
                         if prediff:
-                            sys.stdout.write('[Executing prediff ./%s]\n'%(prediff))
-                            sys.stdout.flush()
-                            sys.stdout.write(subprocess.Popen(['./'+prediff,
+                            logger.write('[Executing prediff ./%s]'%(prediff))
+                            logger.flush()
+                            logger.write(subprocess.Popen(['./'+prediff,
                                                               execname,execlog,compiler,
                                                               ' '.join(env_compopts)+
                                                               ' '+compopts,
@@ -1564,26 +1566,28 @@ def start_tests():
                             execgoodfile = FindGoodFile(basename, commExecNum)
 
                             if not os.path.isfile(execgoodfile) or not os.access(execgoodfile, os.R_OK):
-                                sys.stdout.write('[Error cannot locate program output comparison file %s/%s]\n'%(localdir, execgoodfile))
-                                sys.stdout.write('[Execution output was as follows:]\n')
+                                logger.write('[Error cannot locate program output comparison file %s/%s]'%(localdir, execgoodfile))
+                                logger.write('[Execution output was as follows:]')
                                 exec_output = subprocess.Popen(['cat', execlog],
                                     stdout=subprocess.PIPE).communicate()[0]
-                                sys.stdout.write(trim_output(exec_output))
+                                logger.write(trim_output(exec_output))
 
                                 continue # on to next execopts
 
                             result = DiffFiles(execgoodfile, execlog)
                             if result == 0:
                                 os.unlink(execlog)
-                                sys.stdout.write('%s[Success '%(futuretest))
+                                loggerout = '%s[Success '%(futuretest)
                             else:
-                                sys.stdout.write('%s[Error '%(futuretest))
-                            sys.stdout.write('matching program output for %s/%s'%
+                                loggerout = '%s[Error '%(futuretest)
+                            loggerout += ('matching program output for %s/%s'%
                                             (localdir, test_filename))
                             if result != 0:
-                                printTestVariation(compoptsnum, compoptslist,
-                                                   execoptsnum, execoptslist);
-                            sys.stdout.write(']\n')
+                                a = printTestVariation(compoptsnum, 
+                                        compoptslist, execoptsnum, execoptslist);
+                                print(a)
+                                loggerout += a
+                            logger.write('{}]'.format(loggerout))
 
                             if (result != 0 and futuretest != ''):
                                 badfile=test_filename+'.bad'
@@ -1591,22 +1595,23 @@ def start_tests():
                                     badresult = DiffFiles(badfile, execlog)
                                     if badresult == 0:
                                         os.unlink(execlog);
-                                        sys.stdout.write('[Clean match against .bad file ')
+                                        loggerout = '[Clean match against .bad file '
                                     else:
                                         # bad file doesn't match, which is bad
-                                        sys.stdout.write('[Error matching .bad file ')
-                                    sys.stdout.write('for %s/%s'%(localdir, test_filename))
-                                    printTestVariation(compoptsnum, compoptslist);
-                                    sys.stdout.write(']\n');
+                                        loggerout = '[Error matching .bad file '
+                                    loggerout += 'for %s/%s'%(localdir, test_filename)
+                                    loggerout += printTestVariation(compoptsnum, compoptslist);
+                                    logger.write('{}]'.format(loggerout));
 
 
                     if perftest:
                         if not os.path.isdir(perfdir) and not os.path.isfile(perfdir):
                             os.makedirs(perfdir)
                         if not os.access(perfdir, os.R_OK|os.X_OK):
-                            sys.stdout.write('[Error creating performance test directory %s]\n'%(perfdir))
+                            logger.write('[Error creating performance test directory %s]'%(perfdir))
                             break # on to next compopts
 
+                        global keyfile
                         if explicitexecgoodfile == None:
                             perfexecname = test_filename
                             keyfile = PerfTFile(test_filename,'keys') #e.g. .perfkeys
@@ -1621,28 +1626,28 @@ def start_tests():
                         if perfdate == None:
                             perfdate = datetime.date.today().strftime("%m/%d/%y")
 
-                        sys.stdout.write('[Executing %s/test/computePerfStats %s %s %s %s %s %s]\n'%(utildir, perfexecname, perfdir, keyfile, execlog, str(exectimeout), perfdate))
-                        sys.stdout.flush()
+                        logger.write('[Executing %s/test/computePerfStats %s %s %s %s %s %s]'%(utildir, perfexecname, perfdir, keyfile, execlog, str(exectimeout), perfdate))
+                        logger.flush()
 
                         p = subprocess.Popen([utildir+'/test/computePerfStats',
                                               perfexecname, perfdir, keyfile, execlog, str(exectimeout), perfdate],
                                              stdout=subprocess.PIPE)
-                        sys.stdout.write('%s'%(p.communicate()[0]))
-                        sys.stdout.flush()
+                        logger.write('%s'%(p.communicate()[0]))
+                        logger.flush()
 
                         status = p.returncode
                         if not exectimeout and not launcher_error:
                             if status == 0:
                                 os.unlink(execlog)
-                                sys.stdout.write('%s[Success '%(futuretest))
+                                loggerout = '%s[Success '%(futuretest)
                             else:
-                                sys.stdout.write('%s[Error '%(futuretest))
-                            sys.stdout.write('matching performance keys for %s/%s'%
+                                loggerout = '%s[Error '%(futuretest)
+                            loggerout += ('matching performance keys for %s/%s'%
                                             (localdir, test_filename))
                             if status != 0:
-                                printTestVariation(compoptsnum, compoptslist,
-                                                   execoptsnum, execoptslist);
-                            sys.stdout.write(']\n')
+                                loggerout += printTestVariation(compoptsnum, 
+                                        compoptslist, execoptsnum, execoptslist);
+                            logger.write('{}]'.format(loggerout))
 
                         if exectimeout or status != 0:
                             break
@@ -1654,13 +1659,15 @@ def start_tests():
 
         elapsedCurFileTestTime = time.time() - curFileTestStart
         test_name = os.path.join(localdir, test_filename)
-        print('[Elapsed time to compile and execute all versions of "{0}" - '
+        logger.write('[Elapsed time to compile and execute all versions of "{0}" - '
             '{1:.3f} seconds]'.format(test_name, elapsedCurFileTestTime))
-    sys.exit(0)
 
 
 @atexit.register
 def elapsed_sub_test_time():
+    if not RUNNING:
+        return
+
     """Print elapsed time for sub_test call to console."""
     global sub_test_start_time, localdir
     elapsed_sec = time.time() - sub_test_start_time
@@ -1671,7 +1678,8 @@ def elapsed_sub_test_time():
         base_name = os.path.splitext(chpl_name)[0]
         test_name = os.path.join(test_name, base_name)
 
-    print('[Finished subtest "{0}" - {1:.3f} seconds]\n'.format(test_name, elapsed_sec))
+    logger.write('[Finished subtest "{0}" - {1:.3f} seconds]'.format(test_name, elapsed_sec))
+
 
 
 #
@@ -1764,7 +1772,6 @@ def PerfTFile(test_filename, sfx):
 
 # read file with comments
 def ReadFileWithComments(f, ignoreLeadingSpace=True):
-    # sys.stdout.write('Opening: %s\n'%(f))
     with open(f, 'r') as myfile:
       mylines = myfile.readlines()
     mylist=list()
@@ -1784,23 +1791,23 @@ def ReadFileWithComments(f, ignoreLeadingSpace=True):
 
 # diff 2 files
 def DiffFiles(f1, f2):
-    sys.stdout.write('[Executing diff %s %s]\n'%(f1, f2))
+    logger.write('[Executing diff %s %s]'%(f1, f2))
     p = subprocess.Popen(['diff',f1,f2],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     myoutput = p.communicate()[0] # grab stdout to avoid potential deadlock
     if p.returncode != 0:
-        sys.stdout.write(trim_output(myoutput))
+        logger.write(trim_output(myoutput))
     return p.returncode
 
 # diff output vs. .bad file, filtering line numbers out of error messages that arise
 # in module files.
 def DiffBadFiles(f1, f2):
-    sys.stdout.write('[Executing diff %s %s]\n'%(f1, f2))
+    logger.write('[Executing diff %s %s]'%(f1, f2))
     p = subprocess.Popen([utildir+'/test/diff-ignoring-module-line-numbers', f1, f2],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     myoutput = p.communicate()[0] # grab stdout to avoid potential deadlock
     if p.returncode != 0:
-        sys.stdout.write(myoutput)
+        logger.write(myoutput)
     return p.returncode
 
 # kill process
@@ -1833,16 +1840,16 @@ def cleanup(execname):
             handle = which('handle')
             lsof = which('lsof')
             if handle is not None:
-                sys.stdout.write('[Inspecting open file handles with: {0}\n'.format(handle))
+                logger.write('[Inspecting open file handles with: {0}'.format(handle))
                 subprocess.Popen([handle]).communicate()
             elif lsof is not None:
                 cmd = [lsof, execname]
-                sys.stdout.write('[Inspecting open file handles with: {0}\n'.format(' '.join(cmd)))
+                logger.write('[Inspecting open file handles with: {0}'.format(' '.join(cmd)))
                 subprocess.Popen(cmd).communicate()
 
         # Do not print the warning for cygwin32 when errno is 16 (Device or resource busy).
         if not (getattr(ex, 'errno', 0) == 16 and platform == 'cygwin32'):
-            sys.stdout.write('[Warning: could not remove {0}: {1}]\n'.format(execname, ex))
+            logger.write('[Warning: could not remove {0}: {1}]'.format(execname, ex))
 
 def which(program):
     """Returns absolute path to program, if it exists in $PATH. If not found,
@@ -1871,23 +1878,24 @@ def printTestVariation(compoptsnum, compoptslist,
                        execoptsnum=0, execoptslist=[] ):
     printCompOpts = True
     printExecOpts = True
+    loggerout = ""
     if compoptsnum == 0 or len(compoptslist) <= 1:
         printCompOpts = False
     if execoptsnum == 0 or len(execoptslist) <= 1:
         printExecOpts = False
 
     if (not printCompOpts) and (not printExecOpts):
-        return;
+        return loggerout;
 
-    sys.stdout.write(' (')
+    loggerout += ' ('
     if printCompOpts:
-        sys.stdout.write('compopts: %d'%(compoptsnum))
+        loggerout += 'compopts: %d'%(compoptsnum)
     if printExecOpts:
         if printCompOpts:
-            sys.stdout.write(', ')
-        sys.stdout.write('execopts: %d'%(execoptsnum))
-    sys.stdout.write(')')
-    return
+            loggerout += ', '
+        loggerout += 'execopts: %d'%(execoptsnum)
+    loggerout += ')'
+    return loggerout
 
 # return true if string is an integer
 def IsInteger(str):
@@ -1912,7 +1920,7 @@ def ReadIntegerValue(f, localdir):
 
 # report an error message and exit
 def Fatal(message):
-    sys.stdout.write('[Error (sub_test): '+message+']\n')
+    logger.write('[Error (sub_test): '+message+']')
     magic_exit_code = reduce(operator.add, map(ord, 'CHAPEL')) % 256
     sys.exit(magic_exit_code)
 
@@ -1926,15 +1934,15 @@ def GetTimer(f):
 
     lines = ReadFileWithComments(f)
     if len(lines) != 1:
-        sys.stdout.write('[Error "%s" must contain exactly one non-comment line '
+        logger.write('[Error "%s" must contain exactly one non-comment line '
             'with the name of the timer located in %s to use. Using default ' 
-            'timer %s.]\n' %(f, timersdir, defaultTimer))
+            'timer %s.]' %(f, timersdir, defaultTimer))
         timer = defaultTimer
     else:
         timer = os.path.join(timersdir, lines[0])
 
     if not os.access(timer,os.R_OK|os.X_OK):
-        sys.stdout.write('[Error cannot execute timer "%s", using "time -p"]\n' %(timer))
+        logger.write('[Error cannot execute timer "%s", using "time -p"]' %(timer))
         return 'time -p'
 
     return timer
